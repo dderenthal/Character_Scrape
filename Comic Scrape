@@ -1,0 +1,293 @@
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+from datetime import datetime
+from dateutil import parser
+import re
+import os, warnings
+warnings.filterwarnings('ignore')
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 500)
+pd.set_option('display.width', 150)
+
+#Scrape issue data from book title page
+
+all_links = [
+    'https://marvel.fandom.com/wiki/Hellions_Vol_1'
+]
+
+# Create an empty DataFrame to store the results
+result_df = pd.DataFrame(columns=['Series Year', 'Series', 'Number', 'Title', 'Cover Date'])
+
+for link in all_links:
+    url = link
+    print('\n', url)
+
+    html = requests.get(url).text
+    soup = BeautifulSoup(html, 'html5lib')
+
+    # Extracting series year and series information using BeautifulSoup methods
+    title_tag = soup.find('title')
+    print(title_tag)
+    if title_tag:
+        title_text = title_tag.get_text(strip=True)
+        print('Title Text: ', title_text)
+        series_year = title_text.split(' (')[1][:4]
+        print('Series Year: ', series_year)
+        series_name = title_text.split(' (')[0]
+        print('Series Name: ', series_name)
+
+        # Replace all special characters (excluding '-') with '_' and reduce consecutive underscores to one
+        new_series_name = series_name.replace("&", "-")
+        new_series_name = new_series_name.replace('.', '-')
+        new_series_name = new_series_name.replace('!', '-')
+        new_series_name = new_series_name.replace('+', '-')
+        new_series_name = new_series_name.replace('?', '-')
+        new_series_name = new_series_name.replace(',', '-')
+        print('Step 1: ', new_series_name)
+        new_series_name = new_series_name.replace("'", "-")
+        print('Step 2: ', new_series_name)
+        clean_series_name = re.sub(r'[^\w\s-]', '_', new_series_name)
+        print('Step 3: ', clean_series_name)
+        clean_series_name = clean_series_name.replace(" ", "_")
+        print('Step 4: ', clean_series_name)
+        clean_series_name = re.sub(r'_+', '_', clean_series_name)
+        print('Step 5: ', clean_series_name)
+        
+        #Hard-coded spot fixes
+        #clean_series_name = clean_series_name.replace('MAX', 'Max')
+        clean_series_name = clean_series_name.replace('Wolverine_Hercules_Myths', 'Wolverine_Hercules_Myths-')
+
+        # Extract information for all issues
+        series_selector = f'[id^="{clean_series_name}_"] > a > img'
+        print(series_selector)
+        issue_elements = soup.select(series_selector)
+        #print(issue_elements)
+        for issue_element in issue_elements:
+            #print(issue_element)
+            alt_text = issue_element.get('alt', '')
+            print('\n', alt_text)
+            issue_number = alt_text.split('#')[1].split(' ')[0]
+            print('Issue Number: ', issue_number)
+            if '"' in alt_text:
+                issue_title = '"'+ alt_text.split('"')[1] + '"'
+            else:
+                issue_title = None
+            print('Issue Title: ', issue_title)
+            try:
+                cover_date = alt_text.split('Cover date:')[1].strip()
+                
+                # Convert the cover date to 'MM/DD/YYYY' with the day always being the 1st of the month
+                cover_date_object = datetime.strptime(cover_date, "%B, %Y")
+                formatted_cover_date = cover_date_object.replace(day=1).strftime("%m/%d/%Y")
+            except:
+                cover_date = None
+                formatted_cover_date = None
+            print('Cover Date: ', formatted_cover_date)
+
+            # Append the extracted data to the DataFrame
+            result_df = result_df.append({
+                'Series Year': series_year,
+                'Series': series_name,
+                'Number': issue_number,
+                'Title': issue_title,
+                'Cover Date': formatted_cover_date
+            }, ignore_index=True)
+
+# Save the DataFrame to a CSV file
+csv_filename = 'output_data.csv'
+result_df.to_csv(csv_filename, index=False)
+
+# Open the CSV file with the default application (likely Excel)
+os.system(csv_filename)
+
+
+####################################
+#####################################
+
+#scrape data from character appearance page
+
+import pandas as pd
+
+# Correct sheet_id and properly encode the sheet_name
+sheet_id = "1A7ASxzF1GNoJWJATuVDA8PIyKisQjACSoJmIveeMoG0"
+sheet_name = "Issue Data".replace(" ", "%20")  # Encoding space as %20
+url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
+
+
+sheet_df = pd.read_csv(url, parse_dates=['Cover Date', 'Date Read'])
+sheet_df['Number'] = sheet_df['Number'].apply(lambda x: f"{x:.1f}" if x % 1 else f"{int(x)}")
+sheet_df['Issue'] = sheet_df['Series'] + ' ' + sheet_df['Number']
+#print(sheet_df.head(5))
+
+# Initialize your DataFrame outside of the loop
+results_df = pd.DataFrame(columns=['Series Year', 'Series', 'Number', 'Title', 'Cover Date'])
+
+# Starting URL
+all_links = ['https://marvel.fandom.com/wiki/Category:Victor_Creed_(Earth-616)/Appearances']
+
+# Initialize a dictionary to hold title: href pairs
+ish_href_map = {}
+
+while all_links:
+    # Take the first URL from the list
+    url = all_links.pop(0)
+    #print('\nFetching:', url)
+
+    response = requests.get(url)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    
+    # CSS selector to target the li elements with class "category-page__member" and their child a elements
+    css_selector = 'li.category-page__member > div > a'
+
+    # Find elements matching the CSS selector
+    elements = soup.select(css_selector)
+
+    # Extract the title attribute from each element and store it in a list
+    titles = [element.get('title') for element in elements]
+    issues = [item for item in titles if item[-1].isdigit()]
+    issues = [item for item in issues if 'Edições' not in item]
+    
+    # Convert the exclude list to a set for faster lookup
+    exclude_set = set(sheet_df['Issue'].tolist())
+
+    # Create a new list with elements that are not in the exclude set
+    new_issues = [item for item in issues if item not in exclude_set]
+
+    # Print the list of titles
+    #print(new_issues)
+    
+    # Loop through each title in your list
+    for ish in new_issues:
+        # Try to find a link element that has the exact text of the title
+        link_element = soup.find('a', class_='category-page__member-link', text=ish)
+        if link_element:
+            # If found, extract the href attribute
+            href = link_element.get('href')
+            
+            # Add the title and href to the dictionary
+            ish_href_map[ish] = href
+
+    # At this point, title_href_map contains the mapping of titles to their hrefs
+    #print(ish_href_map)
+    
+    # After processing the current page, look for the "Next" button
+    next_button = soup.select_one('div.category-page__pagination > a.category-page__pagination-next.wds-button.wds-is-secondary')
+    if next_button and next_button.get('href'):
+        # If a "Next" button is found, add its href to the list to process next
+        all_links.append(next_button['href'])
+
+# The loop ends when there are no more "Next" buttons found, meaning you've processed all pages
+#print(ish_href_map)
+
+base_url = "https://marvel.fandom.com"
+
+# Loop through each issue and its corresponding URL in the dictionary
+print('New Issue Count: ', len(ish_href_map))
+count = 0
+for issue, href in ish_href_map.items():
+    count += 1
+    full_url = base_url + href
+    response = requests.get(full_url)
+    page_soup = BeautifulSoup(response.text, 'html.parser')
+    print('\n', count)
+    
+    # Scrape the full title from the page
+    full_title_element = page_soup.select_one('#firstHeading > span')
+    if full_title_element:
+        full_title_text = full_title_element.text
+        #print(full_title_text)
+        # Splitting by spaces and taking everything but the last part (assuming last part is always an issue number)
+        series = ' '.join(full_title_text.split()[:-1])
+        
+        # Assuming 'Number' is the last part of the full title
+        number = full_title_text.split()[-1]
+        
+        cover_date_link = page_soup.select_one('aside > div > div > a')
+        #cover_date_link = page_soup.select_one('')
+        #print('...')
+        #print(page_soup.text)
+        page_soup_lines = page_soup.text.split('\n')
+        if 'Episodes' in page_soup_lines:
+            continue
+        cd_indices = [i for i, s in enumerate(page_soup_lines) if 'Cover Date' in s]
+        #print(page_soup_lines[cd_indices[1]])
+        cd_year = page_soup_lines[cd_indices[1]][:4]
+        #print(cd_year)
+        if not cd_year.isdigit():
+            cd_year = page_soup_lines[cd_indices[0]][:4]
+            #print(cd_year)
+                
+        cd_month = page_soup_lines[cd_indices[1]].split(' ')[1]
+        #print(cd_month)
+        months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+        if cd_month not in months:
+            cd_month = 'January'
+            #print(cd_month)
+            
+        # Create a datetime object for the first day of the given month and year
+        date_obj = datetime.strptime(f"1 {cd_month} {cd_year}", "%d %B %Y")
+
+        # Format the datetime object into a string in the desired format
+        cover_date = date_obj.strftime("%m/%d/%Y")
+
+        #print(formatted_cd)
+
+        
+        #Issue Title
+        ish_title_info = page_soup.select_one('#mw-content-text > div > h2')
+        #print(ish_title_info.text)
+        if 'Appearing in ' in ish_title_info.text:
+            title = ish_title_info.text.split('Appearing in ')[1]
+        else:
+            title = None
+        #print(title)
+        if title == '1st story':
+            title = None
+            
+        # Find the link to the new page for series_year information
+        series_link = page_soup.select_one('aside h2 a')
+        #print("...")
+        #print(series_link)
+        if series_link and 'href' in series_link.attrs:
+            series_url = base_url + series_link['href']
+            #print(series_url)
+            series_response = requests.get(series_url)
+            series_soup = BeautifulSoup(series_response.text, 'html.parser')
+
+            # Now scrape the series_year information from series_soup
+            series_year_info = series_soup.select_one('head > title') 
+            #print(series_year_info)
+            if series_year_info:
+                series_year_text = series_year_info.text  # Or extract the text in a way that gives you just the year
+                if "(" not in series_year_text:
+                    series_year = None
+                else:
+                    series_year = series_year_text.split(' (')[1][:4]
+                    if not series_year.isdigit():
+                        series_year = series_year_text.split(' (')[2][:4]
+                if series == 'Amazing Spider-Man Vol 1':
+                    series_year = 1963
+                #print(series_year)
+
+        print(series_year, series, number)
+        print(title)
+        print(cover_date)
+        # Append the information to your DataFrame
+        results_df = results_df.append({
+            'Series Year': series_year,
+            'Series': series,
+            'Number': number,
+            'Title': title,
+            'Cover Date': cover_date
+        }, ignore_index=True)
+
+# Ensure results_df shows the latest data
+#print(results_df)
+
+# Save the DataFrame to a CSV file
+csv_filename = 'output_data.csv'
+results_df.to_csv(csv_filename, index=False)
+
+# Open the CSV file with the default application (likely Excel)
+os.system(csv_filename)
